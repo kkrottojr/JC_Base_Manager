@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JC Base Manager | Demonstração</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f1f5f9;color:#14253b;font:16px system-ui,sans-serif}
+main{max-width:1050px;margin:auto;padding:32px 20px}h1{margin:4px 0;font-size:2.4rem}h2{margin:0 0 12px;font-size:1.1rem}
+p{line-height:1.5}.tag{color:#075985;font-weight:700}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+section{background:white;border:1px solid #cbd5e1;border-radius:12px;padding:18px;margin:12px 0}
+.zone{padding:8px;min-height:80px;border:2px dashed #cbd5e1;border-radius:8px;list-style:none;margin:0}.over{border-color:#0284c7;background:#e0f2fe}
+li{display:flex;align-items:center;gap:5px;padding:7px;margin:4px 0;background:#f1f5f9;border-radius:6px;cursor:grab}
+li span{flex:1}button,select{font:inherit;padding:6px 10px;border:1px solid #94a3b8;border-radius:6px;background:white;color:inherit}button:enabled{cursor:pointer}button:disabled{opacity:.45}
+.primary{background:#075985;color:white;border-color:#075985}table{border-collapse:collapse;width:100%}th,td{padding:9px;text-align:left;border-bottom:1px solid #e2e8f0;white-space:nowrap}
+th{background:#e0f2fe}.scroll{overflow:auto}.bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+@media(max-width:650px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<div class="tag">DEMONSTRAÇÃO DE PORTFÓLIO · DADOS FICTÍCIOS</div>
+<h1>JC Base Manager</h1>
+<p>Monte uma tabela combinando campos de clientes, contratos e pagamentos sem escrever SQL.</p>
+<div class="grid">
+<section><h2>Campos disponíveis</h2><ul id="available" class="zone" aria-label="Campos disponíveis"></ul></section>
+<section><h2>Colunas da tabela</h2><ul id="selected" class="zone" aria-label="Colunas da tabela"></ul></section>
+</div>
+<p>Arraste os campos entre as listas e solte sobre uma coluna para inseri-la antes dela. Você também pode usar os botões de adicionar, remover e mover.</p>
+<section>
+<h2>Prévia</h2>
+<div class="bar">
+<label for="status">Status do contrato</label>
+<select id="status"><option value="">Todos</option><option>Ativo</option><option>Encerrado</option></select>
+<button class="primary" id="export">Exportar CSV</button>
+<span id="count" role="status"></span>
+</div>
+<div class="scroll"><table id="preview" aria-label="Prévia da tabela"></table></div>
+</section>
+</main>
+<script>
+"use strict";
+const clients = [
+  { id: "C01", name: "Cliente 01", region: "Norte" },
+  { id: "C02", name: "Cliente 02", region: "Sul" },
+  { id: "C03", name: "Cliente 03", region: "Sudeste" }
+];
+const contracts = [
+  { id: "CT-101", clientId: "C01", status: "Ativo", amount: 450 },
+  { id: "CT-102", clientId: "C02", status: "Encerrado", amount: 120 },
+  { id: "CT-103", clientId: "C01", status: "Ativo", amount: 830 },
+  { id: "CT-104", clientId: "C03", status: "Ativo", amount: 275 }
+];
+const payments = [
+  { contractId: "CT-101", amount: 50 }, { contractId: "CT-101", amount: 75 },
+  { contractId: "CT-102", amount: 120 }, { contractId: "CT-104", amount: 100 }
+];
+const fields = {
+  name: "Cliente · Nome", region: "Cliente · Região", id: "Contrato · Código",
+  status: "Contrato · Status", amount: "Contrato · Valor (R$)",
+  paid: "Pagamento · Total pago (R$)", balance: "Contrato · Saldo (R$)"
+};
+const currency = new Intl.NumberFormat("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+function buildRows(status) {
+  const clientById = new Map(clients.map(client => [client.id, client]));
+  const paidByContract = new Map();
+  for (const {contractId, amount} of payments) {
+    paidByContract.set(contractId, (paidByContract.get(contractId) ?? 0) + amount);
+  }
+  return contracts.filter(contract => !status || contract.status === status).map(contract => {
+    const {name, region} = clientById.get(contract.clientId);
+    const paid = paidByContract.get(contract.id) ?? 0;
+    return {...contract, name, region, paid, balance: contract.amount - paid};
+  });
+}
+
+function place(columns, key, before = null) {
+  if (key === before) return columns;
+  const result = columns.filter(column => column !== key);
+  const index = result.indexOf(before);
+  result.splice(index === -1 ? result.length : index, 0, key);
+  return result;
+}
+
+function project(columns, rows) {
+  return rows.map(row => columns.map(key =>
+    typeof row[key] === "number" ? currency.format(row[key]) : row[key]));
+}
+
+function csv(columns, rows) {
+  return [columns.map(key => fields[key]), ...project(columns, rows)]
+    .map(row => row.map(value => '"' + value.replaceAll('"', '""') + '"').join(";"))
+    .join("\r\n");
+}
+
+const available = document.querySelector("#available");
+const selected = document.querySelector("#selected");
+const status = document.querySelector("#status");
+const preview = document.querySelector("#preview");
+const exportButton = document.querySelector("#export");
+let columns = ["id", "name", "status", "balance"];
+let dragging = null;
+
+function updateColumns(next, focusKey, focusAction) {
+  columns = next;
+  render();
+  document.querySelector('[data-key="' + focusKey + '"] button[data-action="' + focusAction + '"]:enabled')?.focus();
+}
+
+function button(label, action, description, handler, disabled = false) {
+  const element = document.createElement("button");
+  element.textContent = label;
+  element.dataset.action = action;
+  element.setAttribute("aria-label", description);
+  element.disabled = disabled;
+  element.onclick = handler;
+  return element;
+}
+
+function fieldItem(key, chosen, index) {
+  const item = document.createElement("li");
+  item.dataset.key = key;
+  item.draggable = true;
+  const label = document.createElement("span");
+  label.textContent = fields[key];
+  item.append(label);
+  item.addEventListener("dragstart", event => {
+    dragging = key;
+    event.dataTransfer.setData("text/plain", key);
+    event.dataTransfer.effectAllowed = "move";
+  });
+  item.addEventListener("dragend", () => {
+    dragging = null;
+    available.classList.remove("over");
+    selected.classList.remove("over");
+  });
+  if (chosen) {
+    item.append(
+      button("↑", "up", "Subir " + fields[key], () => updateColumns(place(columns, key, columns[index - 1]), key, "remove"), index === 0),
+      button("↓", "down", "Descer " + fields[key], () => updateColumns(place(columns, key, columns[index + 2]), key, "remove"), index === columns.length - 1),
+      button("−", "remove", "Remover " + fields[key], () => updateColumns(columns.filter(column => column !== key), key, "add"))
+    );
+  } else {
+    item.append(button("+", "add", "Adicionar " + fields[key], () => updateColumns(place(columns, key), key, "remove")));
+  }
+  return item;
+}
+
+for (const zone of [available, selected]) {
+  zone.addEventListener("dragover", event => {
+    if (!dragging) return;
+    event.preventDefault();
+    zone.classList.add("over");
+  });
+  zone.addEventListener("dragleave", event => {
+    if (!zone.contains(event.relatedTarget)) zone.classList.remove("over");
+  });
+  zone.addEventListener("drop", event => {
+    if (!dragging) return;
+    event.preventDefault();
+    zone.classList.remove("over");
+    const key = dragging;
+    dragging = null;
+    columns = zone === selected
+      ? place(columns, key, event.target.closest("li")?.dataset.key)
+      : columns.filter(column => column !== key);
+    render();
+  });
+}
+
+function renderPreview() {
+  const rows = buildRows(status.value);
+  preview.replaceChildren();
+  exportButton.disabled = !columns.length || !rows.length;
+  document.querySelector("#count").textContent = columns.length
+    ? rows.length + " registro(s) · " + columns.length + " coluna(s)"
+    : "Selecione pelo menos uma coluna.";
+  if (!columns.length) return;
+  const head = preview.createTHead().insertRow();
+  for (const key of columns) {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.textContent = fields[key];
+    head.append(th);
+  }
+  const body = preview.createTBody();
+  for (const values of project(columns, rows)) {
+    const row = body.insertRow();
+    for (const value of values) row.insertCell().textContent = value;
+  }
+}
+
+function render() {
+  available.replaceChildren(...Object.keys(fields).filter(key => !columns.includes(key)).map(key => fieldItem(key, false)));
+  selected.replaceChildren(...columns.map((key, index) => fieldItem(key, true, index)));
+  renderPreview();
+}
+
+status.onchange = renderPreview;
+exportButton.onclick = () => {
+  const file = new Blob(["\uFEFF", csv(columns, buildRows(status.value))], {type: "text/csv;charset=utf-8"});
+  const url = URL.createObjectURL(file);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "jc_base_manager_demo.csv";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+render();
+</script>
+</body>
+</html>
